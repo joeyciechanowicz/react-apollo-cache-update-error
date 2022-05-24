@@ -16,7 +16,7 @@ const PersonType = new GraphQLObjectType({
   },
 });
 
-const personData = { id: 1, age: 0, __typename: 'Person' };
+const personData = { id: 1, age: 0, __typename: "Person" };
 
 const QueryType = new GraphQLObjectType({
   name: "Query",
@@ -81,26 +81,45 @@ const CACHE_QUERY = gql`
   }
 `;
 
+let optimisticIdCount = 0;
 // Increment the clientAge local field in a link
 const cacheUpdateLink = new ApolloLink((operation, forward) => {
-  if (operation.operationName === 'SetAge') {
+  if (operation.operationName === "SetAge") {
     const data = cache.read({
-      query: CACHE_QUERY
+      query: CACHE_QUERY,
     });
+
+    const optimisticId = `custom-${++optimisticIdCount}`;
 
     cache.writeQuery({
       query: CACHE_QUERY,
       data: {
         person: {
           ...data.person,
-          clientAge: data.person.clientAge + 1
-        }
-      }
+          clientAge: data.person.clientAge + 1,
+        },
+      },
     });
 
-    cache.modify({
-      
-    })
+    cache.performTransaction(
+      (c) =>
+        c.writeQuery({
+          query: CACHE_QUERY,
+          data: {
+            person: {
+              ...data.person,
+              clientAge: data.person.clientAge + 1,
+            },
+          },
+        }),
+      optimisticId
+    );
+
+    return forward(operation).map((result) => {
+      cache.removeOptimistic(optimisticId);
+
+      return result;
+    });
   }
   return forward(operation);
 });
@@ -119,7 +138,7 @@ const cache = new InMemoryCache({
       },
     },
   },
-})
+});
 
 /*** APP ***/
 import React from "react";
@@ -158,35 +177,40 @@ function App() {
 
   const [setAge] = useMutation(SET_AGE);
 
+  console.log("re-rendering");
+
   return (
     <main>
       <h1>Apollo Client Issue Reproduction</h1>
 
       <p>
-        Clicking Increment will optimistically add one to the age, and in a link will add one to the client age.
+        Clicking Increment will optimistically add one to the age, and in a link
+        will add one to the client age.
       </p>
 
       <h2>Expected</h2>
-      <p>
-        Each click will simultaneously increment age and clientAge.
-      </p>
+      <p>Each click will simultaneously increment age and clientAge.</p>
 
       <h2>Actual</h2>
       <p>
-        The first click (which adds clientAge to the cached object) works correctly.
-        All future updates only rerender once the network request finishes.
+        The first click (which adds clientAge to the cached object) works
+        correctly. All future updates only rerender once the network request
+        finishes.
       </p>
 
       <div className="add-person">
         <button
           onClick={() => {
-            setAge({ variables: { age: data.person.age + 1 }, optimisticResponse: {
-              person: {
-                __typename: "Person",
-                id: data.person.id,
-                age: data.person.age + 1,
+            setAge({
+              variables: { age: data.person.age + 1 },
+              optimisticResponse: {
+                person: {
+                  __typename: "Person",
+                  id: data.person.id,
+                  age: data.person.age + 1,
+                },
               },
-            } });
+            });
           }}
         >
           Increment Age
@@ -205,7 +229,7 @@ function App() {
       )}
     </main>
   );
-};
+}
 
 const client = new ApolloClient({
   cache,
