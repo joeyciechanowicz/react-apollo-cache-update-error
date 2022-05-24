@@ -96,6 +96,10 @@ const cacheUpdateLink = new ApolloLink((operation, forward) => {
           clientAge: data.person.clientAge + 1
         }
       }
+    });
+
+    cache.modify({
+      
     })
   }
   return forward(operation);
