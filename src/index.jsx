@@ -5,48 +5,41 @@ import {
   GraphQLID,
   GraphQLString,
   GraphQLList,
-} from 'graphql';
+  GraphQLInt,
+} from "graphql";
+
 const PersonType = new GraphQLObjectType({
-  name: 'Person',
+  name: "Person",
   fields: {
     id: { type: GraphQLID },
-    name: { type: GraphQLString },
+    age: { type: GraphQLInt },
   },
 });
 
-const peopleData = [
-  { id: 1, name: 'John Smith' },
-  { id: 2, name: 'Sara Smith' },
-  { id: 3, name: 'Budd Deey' },
-];
+const personData = { id: 1, age: 0, __typename: 'Person' };
 
 const QueryType = new GraphQLObjectType({
-  name: 'Query',
+  name: "Query",
   fields: {
-    people: {
-      type: new GraphQLList(PersonType),
-      resolve: () => peopleData,
+    person: {
+      type: PersonType,
+      resolve: () => personData,
     },
   },
 });
 
 const MutationType = new GraphQLObjectType({
-  name: 'Mutation',
+  name: "Mutation",
   fields: {
-    addPerson: {
+    person: {
       type: PersonType,
       args: {
-        name: { type: GraphQLString },
+        age: { type: GraphQLInt },
       },
-      resolve: function (_, { name }) {
-        const person = {
-          id: peopleData[peopleData.length - 1].id + 1,
-          name,
-        };
-
-        peopleData.push(person);
-        return person;
-      }
+      resolve: function (_, { age }) {
+        personData.age = age;
+        return personData;
+      },
     },
   },
 });
@@ -55,15 +48,15 @@ const schema = new GraphQLSchema({ query: QueryType, mutation: MutationType });
 
 /*** LINK ***/
 import { graphql, print } from "graphql";
-import { ApolloLink, Observable } from "@apollo/client";
+import { ApolloLink, Observable, from } from "@apollo/client";
 function delay(wait) {
-  return new Promise(resolve => setTimeout(resolve, wait));
+  return new Promise((resolve) => setTimeout(resolve, wait));
 }
 
-const link = new ApolloLink(operation => {
-  return new Observable(async observer => {
+const terminatingLink = new ApolloLink((operation) => {
+  return new Observable(async (observer) => {
     const { query, operationName, variables } = operation;
-    await delay(300);
+    await delay(500);
     try {
       const result = await graphql({
         schema,
@@ -79,8 +72,53 @@ const link = new ApolloLink(operation => {
   });
 });
 
+const CACHE_QUERY = gql`
+  query Person {
+    person {
+      id
+      clientAge @client
+    }
+  }
+`;
+
+// Increment the clientAge local field in a link
+const cacheUpdateLink = new ApolloLink((operation, forward) => {
+  if (operation.operationName === 'SetAge') {
+    const data = cache.read({
+      query: CACHE_QUERY
+    });
+
+    cache.writeQuery({
+      query: CACHE_QUERY,
+      data: {
+        person: {
+          ...data.person,
+          clientAge: data.person.clientAge + 1
+        }
+      }
+    })
+  }
+  return forward(operation);
+});
+
+const link = from([cacheUpdateLink, terminatingLink]);
+
+const cache = new InMemoryCache({
+  typePolicies: {
+    Person: {
+      fields: {
+        clientAge: {
+          read(clientAge = 0, ...args) {
+            return clientAge;
+          },
+        },
+      },
+    },
+  },
+})
+
 /*** APP ***/
-import React, { useState } from "react";
+import React from "react";
 import { createRoot } from "react-dom/client";
 import {
   ApolloClient,
@@ -92,88 +130,82 @@ import {
 } from "@apollo/client";
 import "./index.css";
 
-const ALL_PEOPLE = gql`
-  query AllPeople {
-    people {
+const PERSON = gql`
+  query Person {
+    person {
       id
-      name
+      age
+      clientAge @client
     }
   }
 `;
 
-const ADD_PERSON = gql`
-  mutation AddPerson($name: String) {
-    addPerson(name: $name) {
+const SET_AGE = gql`
+  mutation SetAge($age: Int) {
+    person(age: $age) {
       id
-      name
+      age
     }
   }
 `;
 
 function App() {
-  const [name, setName] = useState('');
-  const {
-    loading,
-    data,
-  } = useQuery(ALL_PEOPLE);
+  const { loading, data } = useQuery(PERSON);
 
-  const [addPerson] = useMutation(ADD_PERSON, {
-    update: (cache, { data: { addPerson: addPersonData } }) => {
-      const peopleResult = cache.readQuery({ query: ALL_PEOPLE });
-
-      cache.writeQuery({
-        query: ALL_PEOPLE,
-        data: {
-          ...peopleResult,
-          people: [
-            ...peopleResult.people,
-            addPersonData,
-          ],
-        },
-      });
-    },
-  });
+  const [setAge] = useMutation(SET_AGE);
 
   return (
     <main>
       <h1>Apollo Client Issue Reproduction</h1>
+
       <p>
-        This application can be used to demonstrate an error in Apollo Client.
+        Clicking Increment will optimistically add one to the age, and in a link will add one to the client age.
       </p>
+
+      <h2>Expected</h2>
+      <p>
+        Each click will simultaneously increment age and clientAge.
+      </p>
+
+      <h2>Actual</h2>
+      <p>
+        The first click (which adds clientAge to the cached object) works correctly.
+        All future updates only rerender once the network request finishes.
+      </p>
+
       <div className="add-person">
-        <label htmlFor="name">Name</label>
-        <input
-          type="text"
-          name="name"
-          value={name}
-          onChange={evt => setName(evt.target.value)}
-        />
         <button
           onClick={() => {
-            addPerson({ variables: { name } });
-            setName('');
+            setAge({ variables: { age: data.person.age + 1 }, optimisticResponse: {
+              person: {
+                __typename: "Person",
+                id: data.person.id,
+                age: data.person.age + 1,
+              },
+            } });
           }}
         >
-          Add person
+          Increment Age
         </button>
       </div>
-      <h2>Names</h2>
+
+      <h2>Ages</h2>
+
       {loading ? (
         <p>Loading…</p>
       ) : (
         <ul>
-          {data?.people.map(person => (
-            <li key={person.id}>{person.name}</li>
-          ))}
+          <li>Age: {data.person.age}</li>
+          <li>Client Age: {data.person.clientAge}</li>
         </ul>
       )}
     </main>
   );
-}
+};
 
 const client = new ApolloClient({
-  cache: new InMemoryCache(),
-  link
+  cache,
+  link,
 });
 
 const container = document.getElementById("root");
