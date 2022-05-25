@@ -13,10 +13,11 @@ const PersonType = new GraphQLObjectType({
   fields: {
     id: { type: GraphQLID },
     age: { type: GraphQLInt },
+    clientAge: { type: GraphQLInt },
   },
 });
 
-const personData = { id: 1, age: 0, __typename: "Person" };
+const personData = { id: 1, age: 0, clientAge: 0, __typename: "Person" };
 
 const QueryType = new GraphQLObjectType({
   name: "Query",
@@ -56,7 +57,7 @@ function delay(wait) {
 const terminatingLink = new ApolloLink((operation) => {
   return new Observable(async (observer) => {
     const { query, operationName, variables } = operation;
-    await delay(500);
+    await delay(1000);
     try {
       const result = await graphql({
         schema,
@@ -76,7 +77,7 @@ const CACHE_QUERY = gql`
   query Person {
     person {
       id
-      clientAge @client
+      clientAge
     }
   }
 `;
@@ -87,40 +88,92 @@ const cacheUpdateLink = new ApolloLink((operation, forward) => {
   if (operation.operationName === "SetAge") {
     const data = cache.read({
       query: CACHE_QUERY,
+      optimistic : true
     });
 
     const optimisticId = `custom-${++optimisticIdCount}`;
 
-    cache.writeQuery({
-      query: CACHE_QUERY,
-      data: {
-        person: {
-          ...data.person,
-          clientAge: data.person.clientAge + 1,
-        },
-      },
-    });
+    // cache.writeQuery({
+    //   query: CACHE_QUERY,
+    //   data: {
+    //     person: {
+    //       ...data.person,
+    //       clientAge: data.person.clientAge + 1,
+    //     },
+    //   },
+    //   broadcast: false
+    // });
 
-    cache.performTransaction(
-      (c) =>
-        c.writeQuery({
-          query: CACHE_QUERY,
-          data: {
-            person: {
-              ...data.person,
-              clientAge: data.person.clientAge + 1,
-            },
+    cache.batch({
+      update: c => cache.writeQuery({
+        query: CACHE_QUERY,
+        data: {
+          person: {
+            ...data.person,
+            clientAge: data.person.clientAge + 1,
           },
-        }),
-      optimisticId
-    );
+        },
+        broadcast: true
+      }),
+      optimistic: true
+    })
 
-    return forward(operation).map((result) => {
-      cache.removeOptimistic(optimisticId);
 
-      return result;
-    });
+    // cache.recordOptimisticTransaction(c => c.writeQuery({
+    //   query: CACHE_QUERY,
+    //   data: {
+    //     person: {
+    //       ...data.person,
+    //       clientAge: data.person.clientAge + 1,
+    //     },
+    //   },
+    // }), optimisticId);
+
+    // return forward(operation).map(result => {
+    //   cache.removeOptimistic(optimisticId);
+    //   return result;
+    // });
+
+    // method two
+    // cache.batch({
+    //   update: c => {
+    //     c.writeQuery({
+    //       query: CACHE_QUERY,
+    //       data: {
+    //         person: {
+    //           ...data.person,
+    //           clientAge: data.person.clientAge + 1,
+    //         },
+    //       },
+    //     })
+    //   },
+    //   optimistic: optimisticId
+    // })
+
+    // return forward(operation).map((result) => {
+    //   cache.batch({
+    //     update: (c) => {
+    //       const data2 = cache.read({
+    //         query: CACHE_QUERY,
+    //       });
+    //       c.writeQuery({
+    //         query: CACHE_QUERY,
+    //         data: {
+    //           person: {
+    //             ...data.person,
+    //             clientAge: data2.person.clientAge + 1,
+    //           },
+    //         },
+    //         broadcast: false
+    //       });
+    //     },
+    //     removeOptimistic: optimisticId,
+    //   });
+
+    //   return result;
+    // });
   }
+
   return forward(operation);
 });
 
@@ -158,7 +211,7 @@ const PERSON = gql`
     person {
       id
       age
-      clientAge @client
+      clientAge
     }
   }
 `;
@@ -173,11 +226,12 @@ const SET_AGE = gql`
 `;
 
 function App() {
-  const { loading, data } = useQuery(PERSON);
+  const query = useQuery(PERSON);
+  const { loading, data } = query;
 
   const [setAge] = useMutation(SET_AGE);
 
-  console.log("re-rendering");
+  // console.log("re-rendering");
 
   return (
     <main>
