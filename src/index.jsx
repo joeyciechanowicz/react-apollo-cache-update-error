@@ -93,48 +93,34 @@ const cacheUpdateLink = new ApolloLink((operation, forward) => {
 
     const optimisticId = `custom-${++optimisticIdCount}`;
 
-    // cache.writeQuery({
-    //   query: CACHE_QUERY,
-    //   data: {
-    //     person: {
-    //       ...data.person,
-    //       clientAge: data.person.clientAge + 1,
-    //     },
-    //   },
-    //   broadcast: false
-    // });
-
-    cache.batch({
-      update: c => cache.writeQuery({
-        query: CACHE_QUERY,
-        data: {
-          person: {
-            ...data.person,
-            clientAge: data.person.clientAge + 1,
-          },
+    // method 1 - single read, double initial write
+    cache.writeQuery({
+      query: CACHE_QUERY,
+      data: {
+        person: {
+          ...data.person,
+          clientAge: data.person.clientAge + 1,
         },
-        broadcast: true
-      }),
-      optimistic: true
-    })
+      },
+      broadcast: false
+    });
 
+    cache.recordOptimisticTransaction(c => c.writeQuery({
+      query: CACHE_QUERY,
+      data: {
+        person: {
+          ...data.person,
+          clientAge: data.person.clientAge + 1,
+        },
+      },
+    }), optimisticId);
 
-    // cache.recordOptimisticTransaction(c => c.writeQuery({
-    //   query: CACHE_QUERY,
-    //   data: {
-    //     person: {
-    //       ...data.person,
-    //       clientAge: data.person.clientAge + 1,
-    //     },
-    //   },
-    // }), optimisticId);
+    return forward(operation).map(result => {
+      cache.removeOptimistic(optimisticId);
+      return result;
+    });
 
-    // return forward(operation).map(result => {
-    //   cache.removeOptimistic(optimisticId);
-    //   return result;
-    // });
-
-    // method two
+    // method two - double read
     // cache.batch({
     //   update: c => {
     //     c.writeQuery({
